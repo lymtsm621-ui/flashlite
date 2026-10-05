@@ -19,21 +19,18 @@ import auth
 # ⚙️ الإعدادات
 # ============================================================
 GOOGLE_CLIENT_ID = "694239714110-vctdhk0pdjq26lr4nm089bo6iq3l48ke.apps.googleusercontent.com"
-API_KEY = os.environ.get("GEMINI_API_KEY", "")
+API_KEY = os.environ.get(
+    "GEMINI_API_KEY",
+    "AQ.Ab8RN6Iu_GJMRfxwMvVy9rnI23MlP3sh2L0HANumgooZ18OQOg"
+)
 DB_PATH = os.path.join(os.path.dirname(__file__), "flashlite.db")
 
 MODEL_QUEUE = [
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest",
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-pro",
-    "gemini-pro-latest",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it",
+    "qwen-qwq-32b",
 ]
 AVAILABLE_MODEL = None
 
@@ -110,19 +107,25 @@ def close_db(e=None):
 # 🔍 اكتشاف الموديل
 # ============================================================
 def detect_best_model():
+    """يتحقق من الموديلات المتاحة على Groq"""
     global AVAILABLE_MODEL
     if AVAILABLE_MODEL:
         return AVAILABLE_MODEL
-    print("🔎 جاري اختبار الموديلات...")
+    print("🔎 جاري اختبار الموديلات على Groq...")
     for model in MODEL_QUEUE:
         try:
-            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                   f"{model}:generateContent?key={API_KEY}")
-            payload = {"contents": [{"parts": [{"text": "hi"}]}],
-                       "generationConfig": {"maxOutputTokens": 5}}
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5
+            }
             req = urllib.request.Request(
                 url, data=json.dumps(payload).encode('utf-8'),
-                headers={"Content-Type": "application/json"}, method="POST"
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {GROQ_API_KEY}"
+                }, method="POST"
             )
             with urllib.request.urlopen(req, timeout=15) as r:
                 json.loads(r.read().decode())
@@ -1675,38 +1678,41 @@ def chat_stream():
         full_reply = ""
         for try_model in models_list:
             try:
-                url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                       f"{try_model}:streamGenerateContent?key={API_KEY}&alt=sse")
-                payload = {"contents": [{"parts": [{"text": prompt}]}],
-                           "generationConfig": {"temperature": 0.9, "maxOutputTokens": 2048, "topP": 0.95}}
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                payload = {
+                    "model": try_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.9,
+                    "max_tokens": 2048,
+                    "stream": True
+                }
                 req = urllib.request.Request(
                     url, data=json.dumps(payload).encode('utf-8'),
-                    headers={"Content-Type": "application/json"}, method="POST"
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {GROQ_API_KEY}"
+                    }, method="POST"
                 )
                 got = False
                 with urllib.request.urlopen(req, timeout=60) as resp:
-                    buffer = b''
                     for raw in resp:
-                        buffer += raw
-                        while b'\n' in buffer:
-                            line, buffer = buffer.split(b'\n', 1)
-                            line = line.strip()
-                            if not line or not line.startswith(b'data: '):
-                                continue
-                            try:
-                                chunk = json.loads(line[6:].decode('utf-8'))
-                                text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
-                                if text:
-                                    if not got:
-                                        got = True
-                                        if try_model != models_list[0]:
-                                            yield f"data: {json.dumps({'text': f'_(تم التبديل إلى {try_model})_\\n\\n'})}\n\n"
-                                    full_reply += text
-                                    yield f"data: {json.dumps({'text': text})}\n\n"
-                            except (KeyError, IndexError, json.JSONDecodeError):
-                                continue
+                        line = raw.decode('utf-8').strip()
+                        if not line or not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            text = chunk['choices'][0]['delta'].get('content', '')
+                            if text:
+                                if not got:
+                                    got = True
+                                full_reply += text
+                                yield f"data: {json.dumps({'text': text})}\n\n"
+                        except (KeyError, IndexError, json.JSONDecodeError):
+                            continue
                 if got:
-                    # حفظ رد AI — اتصال مستقل
                     if chat_id and full_reply:
                         try:
                             con = sqlite3.connect(DB_PATH)
@@ -1739,33 +1745,10 @@ def chat_stream():
 @app.route('/api/vision', methods=['POST'])
 @require_user
 def vision():
-    data = request.get_json() or {}
-    image_b64 = data.get('image', '')
-    prompt = data.get('prompt', 'صف ما تراه بالعربية')
-    if not image_b64:
-        return jsonify({"error": "لا توجد صورة"}), 400
-    if ',' in image_b64:
-        image_b64 = image_b64.split(',', 1)[1]
-    model = detect_best_model()
-    if not model:
-        return jsonify({"error": "لا يوجد موديل"}), 500
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
-        payload = {
-            "contents": [{"parts": [
-                {"text": prompt},
-                {"inlineData": {"mimeType": "image/jpeg", "data": image_b64}}
-            ]}],
-            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 512}
-        }
-        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
-                                      headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as r:
-            res = json.loads(r.read().decode())
-            reply = res['candidates'][0]['content']['parts'][0]['text']
-        return jsonify({"reply": reply})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Groq لا يدعم الصور حالياً — نرد برسالة"""
+    return jsonify({
+        "reply": "عذراً، ميزة تحليل الصور غير متاحة في هذا الإصدار. يمكنك طرح سؤالك نصياً وسأساعدك."
+    })
 
 
 if __name__ == '__main__':
@@ -1780,4 +1763,5 @@ if __name__ == '__main__':
     print("=" * 60)
     print("🌐 http://127.0.0.1:5000")
     print("=" * 60)
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False, threaded=True, use_reloader=False)
+    app.run(host='127.0.0.1', port=5000, debug=False, threaded=True, use_reloader=False)
+
