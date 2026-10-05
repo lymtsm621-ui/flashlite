@@ -1624,7 +1624,13 @@ def chat_stream():
     if not prompt:
         return Response("data: [DONE]\n\n", mimetype='text/event-stream')
 
-    # حفظ رسالة المستخدم — اتصال مستقل
+    print("=" * 50)
+    print("PROMPT:", prompt[:100])
+    print("KEY EXISTS:", bool(API_KEY))
+    print("KEY LENGTH:", len(API_KEY) if API_KEY else 0)
+    print("=" * 50)
+
+    # حفظ رسالة المستخدم
     if chat_id:
         try:
             con = sqlite3.connect(DB_PATH)
@@ -1635,14 +1641,14 @@ def chat_stream():
             con.commit()
             con.close()
         except Exception as e:
-            print(f"DB error (user): {e}")
+            print(f"DB user error: {e}")
 
     def sse_text(text):
         for chunk in [text[i:i+8] for i in range(0, len(text), 8)]:
             yield f"data: {json.dumps({'text': chunk})}\n\n"
         yield "data: [DONE]\n\n"
 
-    # ردود محلية
+    # رد محلي
     if any(k in prompt for k in ["من صممك", "صممك"]):
         msg = "أنا من تصميم **معتصم علي** 🚀"
         if chat_id:
@@ -1652,73 +1658,99 @@ def chat_stream():
                             (chat_id, msg))
                 con.commit()
                 con.close()
-            except Exception as e:
-                print(f"DB error (local): {e}")
+            except: pass
         return Response(stream_with_context(sse_text(msg)), mimetype='text/event-stream')
 
     def generate():
-        primary = detect_best_model()
-        models_list = [primary] if primary else []
-        for m in MODEL_QUEUE:
-            if m not in models_list:
-                models_list.append(m)
-        full_reply = ""
-        for try_model in models_list:
+        # نماذج Gemini متاحة
+        models_to_try = [
+            "gemini-flash-latest",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-2.5-pro",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+        ]
+
+        for model in models_to_try:
             try:
-                url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                       f"{try_model}:streamGenerateContent?key={API_KEY}&alt=sse")
-                payload = {"contents": [{"parts": [{"text": prompt}]}],
-                           "generationConfig": {"temperature": 0.9, "maxOutputTokens": 2048, "topP": 0.95}}
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.9,
+                        "maxOutputTokens": 2048,
+                    }
+                }
+                print(f">>> Trying: {model}")
                 req = urllib.request.Request(
-                    url, data=json.dumps(payload).encode('utf-8'),
-                    headers={"Content-Type": "application/json"}, method="POST"
+                    url,
+                    data=json.dumps(payload).encode('utf-8'),
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
                 )
-                got = False
                 with urllib.request.urlopen(req, timeout=60) as resp:
-                    buffer = b''
-                    for raw in resp:
-                        buffer += raw
-                        while b'\n' in buffer:
-                            line, buffer = buffer.split(b'\n', 1)
-                            line = line.strip()
-                            if not line or not line.startswith(b'data: '):
-                                continue
-                            try:
-                                chunk = json.loads(line[6:].decode("utf-8"))
-                                print("GEMINI_RAW:", str(chunk)[:400])
-                                text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
-                                if text:
-                                    got = True
-                                    full_reply += text
-                                    yield f"data: {json.dumps({'text': text})}\\n\\n"
-                            except (KeyError, IndexError, json.JSONDecodeError):
-                                continue
-                if got:
-                    if chat_id and full_reply:
+                    raw = resp.read().decode('utf-8')
+                    print(f"<<< RAW (first 500): {raw[:500]}")
+                    res = json.loads(raw)
+                    
+                    if 'candidates' not in res or not res['candidates']:
+                        print(f"!!! No candidates: {str(res)[:300]}")
+                        continue
+                    
+                    cand = res['candidates'][0]
+                    if 'content' not in cand or 'parts' not in cand['content']:
+                        print(f"!!! No content: {str(cand)[:300]}")
+                        continue
+                    
+                    text = cand['content']['parts'][0].get('text', '')
+                    if not text:
+                        print(f"!!! Empty text")
+                        continue
+                    
+                    print(f"✅ GOT TEXT ({len(text)} chars)")
+                    
+                    # حفظ الرد
+                    if chat_id and text:
                         try:
                             con = sqlite3.connect(DB_PATH)
                             con.execute("INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'ai', ?, ?)",
-                                        (chat_id, full_reply, try_model))
-                            con.execute("UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (chat_id,))
+                                        (chat_id, text, model))
+                            con.execute("UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                        (chat_id,))
                             con.commit()
                             con.close()
                         except Exception as e:
-                            print(f"DB error (ai): {e}")
-                    yield "data: [DONE]\\n\\n"
+                            print(f"DB ai error: {e}")
+                    
+                    # إرسال كـ SSE
+                    for chunk in [text[i:i+8] for i in range(0, len(text), 8)]:
+                        yield f"data: {json.dumps({'text': chunk})}\n\n"
+                    yield "data: [DONE]\n\n"
                     return
-            except Exception as e:
-                print(f"FAIL {try_model}: {str(e)[:80]}")
+                    
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode('utf-8')[:300]
+                except: pass
+                print(f"!!! {model} HTTP {e.code}: {body}")
                 continue
-        yield f"data: {json.dumps({'error': 'All models busy'})}\\n\\n"
-        yield "data: [DONE]\\n\\n"
+            except Exception as e:
+                print(f"!!! {model}: {str(e)[:200]}")
+                continue
+        
+        # كل المحاولات فشلت
+        error_msg = "❌ فشل الاتصال بـ Gemini. تأكد من المفتاح والحصة."
+        yield f"data: {json.dumps({'text': error_msg})}\n\n"
+        yield "data: [DONE]\n\n"
 
     return Response(
         stream_with_context(generate()),
         mimetype='text/event-stream',
-        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', 'Connection': 'keep-alive'}
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
     )
-
-
 
 
 @app.route('/api/vision', methods=['POST'])
