@@ -19,10 +19,7 @@ import auth
 # ⚙️ الإعدادات
 # ============================================================
 GOOGLE_CLIENT_ID = "694239714110-vctdhk0pdjq26lr4nm089bo6iq3l48ke.apps.googleusercontent.com"
-API_KEY = os.environ.get(
-    "GEMINI_API_KEY",
-    "AQ.Ab8RN6Iu_GJMRfxwMvVy9rnI23MlP3sh2L0HANumgooZ18OQOg"
-)
+API_KEY = os.environ.get("GEMINI_API_KEY", "")
 DB_PATH = os.path.join(os.path.dirname(__file__), "flashlite.db")
 
 MODEL_QUEUE = [
@@ -1783,5 +1780,4 @@ if __name__ == '__main__':
     print("=" * 60)
     print("🌐 http://127.0.0.1:5000")
     print("=" * 60)
-    app.run(host='127.0.0.1', port=5000, debug=False, threaded=True, use_reloader=False)
-
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False, threaded=True, use_reloader=False)
