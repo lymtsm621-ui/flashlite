@@ -1658,62 +1658,61 @@ def chat_stream():
         return Response(stream_with_context(sse_text(msg)), mimetype='text/event-stream')
 
     def generate():
-    primary = detect_best_model()
-    models_list = [primary] if primary else []
-    for m in MODEL_QUEUE:
-        if m not in models_list:
-            models_list.append(m)
-    
-    full_reply = ""
-    for try_model in models_list:
-        try:
-            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-                   f"{try_model}:streamGenerateContent?key={API_KEY}&alt=sse")
-            payload = {"contents": [{"parts": [{"text": prompt}]}],
-                       "generationConfig": {"temperature": 0.9, "maxOutputTokens": 2048, "topP": 0.95}}
-            req = urllib.request.Request(
-                url, data=json.dumps(payload).encode('utf-8'),
-                headers={"Content-Type": "application/json"}, method="POST"
-            )
-            got = False
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                buffer = b''
-                for raw in resp:
-                    buffer += raw
-                    while b'\n' in buffer:
-                        line, buffer = buffer.split(b'\n', 1)
-                        line = line.strip()
-                        if not line or not line.startswith(b'data: '):
-                            continue
+        primary = detect_best_model()
+        models_list = [primary] if primary else []
+        for m in MODEL_QUEUE:
+            if m not in models_list:
+                models_list.append(m)
+        full_reply = ""
+        for try_model in models_list:
+            try:
+                url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                       f"{try_model}:streamGenerateContent?key={API_KEY}&alt=sse")
+                payload = {"contents": [{"parts": [{"text": prompt}]}],
+                           "generationConfig": {"temperature": 0.9, "maxOutputTokens": 2048, "topP": 0.95}}
+                req = urllib.request.Request(
+                    url, data=json.dumps(payload).encode('utf-8'),
+                    headers={"Content-Type": "application/json"}, method="POST"
+                )
+                got = False
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    buffer = b''
+                    for raw in resp:
+                        buffer += raw
+                        while b'\n' in buffer:
+                            line, buffer = buffer.split(b'\n', 1)
+                            line = line.strip()
+                            if not line or not line.startswith(b'data: '):
+                                continue
+                            try:
+                                chunk = json.loads(line[6:].decode('utf-8'))
+                                text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
+                                if text:
+                                    got = True
+                                    full_reply += text
+                                    yield f"data: {json.dumps({'text': text})}\\n\\n"
+                            except (KeyError, IndexError, json.JSONDecodeError):
+                                continue
+                if got:
+                    if chat_id and full_reply:
                         try:
-                            chunk = json.loads(line[6:].decode('utf-8'))
-                            text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
-                            if text:
-                                got = True
-                                full_reply += text
-                                yield f"data: {json.dumps({'text': text})}\\n\\n"
-                        except (KeyError, IndexError, json.JSONDecodeError):
-                            continue
-            if got:
-                if chat_id and full_reply:
-                    try:
-                        con = sqlite3.connect(DB_PATH)
-                        con.execute("INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'ai', ?, ?)",
-                                    (chat_id, full_reply, try_model))
-                        con.execute("UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                                    (chat_id,))
-                        con.commit()
-                        con.close()
-                    except Exception as e:
-                        print(f"DB error (ai): {e}")
-                yield "data: [DONE]\\n\\n"
-                return
-        except Exception as e:
-            print(f"❌ {try_model}: {str(e)[:80]}")
-            continue
-    
-    yield f"data: {json.dumps({'error': '⚠️ جميع الموديلات مشغولة. حاول بعد دقيقة.'})}\\n\\n"
-    yield "data: [DONE]\\n\\n"    return Response(
+                            con = sqlite3.connect(DB_PATH)
+                            con.execute("INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'ai', ?, ?)",
+                                        (chat_id, full_reply, try_model))
+                            con.execute("UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (chat_id,))
+                            con.commit()
+                            con.close()
+                        except Exception as e:
+                            print(f"DB error (ai): {e}")
+                    yield "data: [DONE]\\n\\n"
+                    return
+            except Exception as e:
+                print(f"FAIL {try_model}: {str(e)[:80]}")
+                continue
+        yield f"data: {json.dumps({'error': 'All models busy'})}\\n\\n"
+        yield "data: [DONE]\\n\\n"
+
+    return Response(
         stream_with_context(generate()),
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', 'Connection': 'keep-alive'}
@@ -1725,10 +1724,30 @@ def chat_stream():
 @app.route('/api/vision', methods=['POST'])
 @require_user
 def vision():
-    """Groq لا يدعم الصور حالياً — نرد برسالة"""
-    return jsonify({
-        "reply": "عذراً، ميزة تحليل الصور غير متاحة في هذا الإصدار. يمكنك طرح سؤالك نصياً وسأساعدك."
-    })
+    data = request.get_json() or {}
+    image_b64 = data.get('image', '')
+    prompt = data.get('prompt', 'Describe the image in Arabic')
+    if not image_b64:
+        return jsonify({"error": "No image"}), 400
+    if ',' in image_b64:
+        image_b64 = image_b64.split(',', 1)[1]
+    model = detect_best_model()
+    if not model:
+        return jsonify({"error": "No model"}), 500
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+        payload = {"contents": [{"parts": [
+            {"text": prompt},
+            {"inlineData": {"mimeType": "image/jpeg", "data": image_b64}}
+        ]}], "generationConfig": {"temperature": 0.7, "maxOutputTokens": 512}}
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
+                                      headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            res = json.loads(r.read().decode())
+            reply = res['candidates'][0]['content']['parts'][0]['text']
+        return jsonify({"reply": reply})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
