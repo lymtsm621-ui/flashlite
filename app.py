@@ -26,11 +26,10 @@ API_KEY = os.environ.get(
 DB_PATH = os.path.join(os.path.dirname(__file__), "flashlite.db")
 
 MODEL_QUEUE = [
-    "gemini-2.0-flash-exp",
     "gemini-flash-latest",
     "gemini-2.5-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-exp",
 ]
 AVAILABLE_MODEL = None
 
@@ -1685,7 +1684,7 @@ def chat_stream():
                             if not line or not line.startswith(b'data: '):
                                 continue
                             try:
-                                chunk = json.loads(line[6:].decode("utf-8")); print("DEBUG:", str(chunk)[:300])
+                                chunk = json.loads(line[6:].decode("utf-8"))
                                 text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
                                 if text:
                                     got = True
