@@ -969,10 +969,10 @@ function toggleSidebar(){document.getElementById('sidebar').classList.toggle('op
 /* ===== Messages ===== */
 function welcomeHTML(){return`<div class="welcome"><h1>👋 أهلاً ${user?user.username:''}</h1><p>أنا Flash-Lite، كيف أساعدك اليوم؟</p><div class="chips"><div class="chip" onclick="quickSend('اكتب كود Python لخوارزمية ترتيب سريعة')"><span class="ico">💻</span><div class="ttl">كود Python</div></div><div class="chip" onclick="quickSend('صمم صفحة تسجيل دخول عصرية HTML و CSS')"><span class="ico">🎨</span><div class="ttl">تصميم واجهة</div></div><div class="chip" onclick="quickSend('اشرح الذكاء الاصطناعي بشكل مبسط')"><span class="ico">🧠</span><div class="ttl">شرح مبسط</div></div><div class="chip" onclick="quickSend('ارسم مدينة مستقبلية عند الغروب')"><span class="ico">🖼️</span><div class="ttl">توليد صورة</div></div></div></div>`}
 function escapeHtml(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
-function formatTime(ts){try{if(!ts)return "";var s=String(ts).replace(" ","T");if(s.indexOf("Z")<0&&s.indexOf("+")<0)s+="Z";var d=new Date(s);if(isNaN(d.getTime()))return "";return d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0")}catch(e){return""}}
+function formatTime(ts){try{const d=new Date(ts);return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')}catch{return''}}
 function renderMarkdown(t){try{return DOMPurify.sanitize(marked.parse(t,{breaks:true,gfm:true}))}catch{return escapeHtml(t)}}
 function buildActions(role){return`<button class="act-btn" onclick="copyMsg(this)" title="نسخ">📋</button>${role==='ai'?'<button class="act-btn" onclick="speakMessage(this)" title="نطق">🔊</button>':''}`}
-. addMessage(role,content,time,save=true){
+function addMessage(role,content,time,save=true){
   const b=document.getElementById('chatBox');if(b.querySelector('.welcome'))b.innerHTML='';
   const m=document.createElement('div');m.className='msg '+role;
   const a=role==='user'?'أ':'G';
