@@ -19,15 +19,18 @@ import auth
 # ⚙️ الإعدادات
 # ============================================================
 GOOGLE_CLIENT_ID = "694239714110-vctdhk0pdjq26lr4nm089bo6iq3l48ke.apps.googleusercontent.com"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+API_KEY = os.environ.get(
+    "GEMINI_API_KEY",
+    "AQ.Ab8RN6Iu_GJMRfxwMvVy9rnI23MlP3sh2L0HANumgooZ18OQOg"
+)
 DB_PATH = os.path.join(os.path.dirname(__file__), "flashlite.db")
 
 MODEL_QUEUE = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-    "qwen-qwq-32b",
+    "gemini-2.0-flash-exp",
+    "gemini-flash-latest",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
 ]
 AVAILABLE_MODEL = None
 
@@ -104,34 +107,23 @@ def close_db(e=None):
 # 🔍 اكتشاف الموديل
 # ============================================================
 def detect_best_model():
-    """يتحقق من الموديلات المتاحة على Groq"""
     global AVAILABLE_MODEL
     if AVAILABLE_MODEL:
         return AVAILABLE_MODEL
-    print("🔎 جاري اختبار الموديلات على Groq...")
+    print("Testing Gemini models...")
     for model in MODEL_QUEUE:
         try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 5
-            }
-            req = urllib.request.Request(
-                url, data=json.dumps(payload).encode('utf-8'),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {GROQ_API_KEY}"
-                }, method="POST"
-            )
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+            payload = {"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"maxOutputTokens": 5}}
+            req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
+                                          headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(req, timeout=15) as r:
                 json.loads(r.read().decode())
                 AVAILABLE_MODEL = model
-                print(f"✅ الموديل: {model}")
+                print(f"OK: {model}")
                 return model
         except Exception as e:
-            print(f"❌ {model}: {str(e)[:60]}")
-    print("🚨 لا يوجد موديل!")
+            print(f"FAIL {model}: {str(e)[:60]}")
     return None
 
 
@@ -1666,71 +1658,62 @@ def chat_stream():
         return Response(stream_with_context(sse_text(msg)), mimetype='text/event-stream')
 
     def generate():
-        primary = detect_best_model()
-        models_list = [primary] if primary else []
-        for m in MODEL_QUEUE:
-            if m not in models_list:
-                models_list.append(m)
-
-        full_reply = ""
-        for try_model in models_list:
-            try:
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                payload = {
-                    "model": try_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.9,
-                    "max_tokens": 2048,
-                    "stream": True
-                }
-                req = urllib.request.Request(
-                    url, data=json.dumps(payload).encode('utf-8'),
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {GROQ_API_KEY}"
-                    }, method="POST"
-                )
-                got = False
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    for raw in resp:
-                        line = raw.decode('utf-8').strip()
-                        if not line or not line.startswith("data: "):
+    primary = detect_best_model()
+    models_list = [primary] if primary else []
+    for m in MODEL_QUEUE:
+        if m not in models_list:
+            models_list.append(m)
+    
+    full_reply = ""
+    for try_model in models_list:
+        try:
+            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                   f"{try_model}:streamGenerateContent?key={API_KEY}&alt=sse")
+            payload = {"contents": [{"parts": [{"text": prompt}]}],
+                       "generationConfig": {"temperature": 0.9, "maxOutputTokens": 2048, "topP": 0.95}}
+            req = urllib.request.Request(
+                url, data=json.dumps(payload).encode('utf-8'),
+                headers={"Content-Type": "application/json"}, method="POST"
+            )
+            got = False
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                buffer = b''
+                for raw in resp:
+                    buffer += raw
+                    while b'\n' in buffer:
+                        line, buffer = buffer.split(b'\n', 1)
+                        line = line.strip()
+                        if not line or not line.startswith(b'data: '):
                             continue
-                        data_str = line[6:]
-                        if data_str == "[DONE]":
-                            break
                         try:
-                            chunk = json.loads(data_str)
-                            text = chunk['choices'][0]['delta'].get('content', '')
+                            chunk = json.loads(line[6:].decode('utf-8'))
+                            text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
                             if text:
-                                if not got:
-                                    got = True
+                                got = True
                                 full_reply += text
-                                yield f"data: {json.dumps({'text': text})}\n\n"
+                                yield f"data: {json.dumps({'text': text})}\\n\\n"
                         except (KeyError, IndexError, json.JSONDecodeError):
                             continue
-                if got:
-                    if chat_id and full_reply:
-                        try:
-                            con = sqlite3.connect(DB_PATH)
-                            con.execute("INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'ai', ?, ?)",
-                                        (chat_id, full_reply, try_model))
-                            con.execute("UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                                        (chat_id,))
-                            con.commit()
-                            con.close()
-                        except Exception as e:
-                            print(f"DB error (ai): {e}")
-                    yield "data: [DONE]\n\n"
-                    return
-            except Exception as e:
-                print(f"❌ {try_model}: {str(e)[:80]}")
-                continue
-
-        yield f"data: {json.dumps({'error': '⚠️ جميع الموديلات مشغولة. حاول بعد دقيقة.'})}\n\n"
-        yield "data: [DONE]\n\n"
-
-    return Response(
+            if got:
+                if chat_id and full_reply:
+                    try:
+                        con = sqlite3.connect(DB_PATH)
+                        con.execute("INSERT INTO messages (chat_id, role, content, model) VALUES (?, 'ai', ?, ?)",
+                                    (chat_id, full_reply, try_model))
+                        con.execute("UPDATE chats SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                    (chat_id,))
+                        con.commit()
+                        con.close()
+                    except Exception as e:
+                        print(f"DB error (ai): {e}")
+                yield "data: [DONE]\\n\\n"
+                return
+        except Exception as e:
+            print(f"❌ {try_model}: {str(e)[:80]}")
+            continue
+    
+    yield f"data: {json.dumps({'error': '⚠️ جميع الموديلات مشغولة. حاول بعد دقيقة.'})}\\n\\n"
+    yield "data: [DONE]\\n\\n"    return Response(
         stream_with_context(generate()),
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', 'Connection': 'keep-alive'}
@@ -1760,4 +1743,5 @@ if __name__ == '__main__':
     print("=" * 60)
     print("🌐 http://127.0.0.1:5000")
     print("=" * 60)
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False, threaded=True, use_reloader=False)
+    app.run(host='127.0.0.1', port=5000, debug=False, threaded=True, use_reloader=False)
+
