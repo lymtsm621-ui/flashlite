@@ -1685,6 +1685,7 @@ def chat_stream():
                                 continue
                             try:
                                 chunk = json.loads(line[6:].decode("utf-8"))
+                                print("GEMINI_RAW:", str(chunk)[:400])
                                 text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
                                 if text:
                                     got = True
