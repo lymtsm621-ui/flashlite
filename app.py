@@ -1685,7 +1685,7 @@ def chat_stream():
                             if not line or not line.startswith(b'data: '):
                                 continue
                             try:
-                                chunk = json.loads(line[6:].decode('utf-8'))
+                                chunk = json.loads(line[6:].decode("utf-8")); print("DEBUG:", str(chunk)[:300])
                                 text = chunk['candidates'][0]['content']['parts'][0].get('text', '')
                                 if text:
                                     got = True
