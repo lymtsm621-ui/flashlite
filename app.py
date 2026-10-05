@@ -19,10 +19,7 @@ import auth
 # ⚙️ الإعدادات
 # ============================================================
 GOOGLE_CLIENT_ID = "694239714110-vctdhk0pdjq26lr4nm089bo6iq3l48ke.apps.googleusercontent.com"
-API_KEY = os.environ.get(
-    "GEMINI_API_KEY",
-    "AQ.Ab8RN6Iu_GJMRfxwMvVy9rnI23MlP3sh2L0HANumgooZ18OQOg"
-)
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 DB_PATH = os.path.join(os.path.dirname(__file__), "flashlite.db")
 
 MODEL_QUEUE = [
