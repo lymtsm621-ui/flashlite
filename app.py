@@ -19,17 +19,17 @@ import auth
 # ⚙️ الإعدادات
 # ============================================================
 GOOGLE_CLIENT_ID = "694239714110-vctdhk0pdjq26lr4nm089bo6iq3l48ke.apps.googleusercontent.com"
-API_KEY = os.environ.get(
-    "GEMINI_API_KEY",
-    "AQ.Ab8RN6Iu_GJMRfxwMvVy9rnI23MlP3sh2L0HANumgooZ18OQOg"
-)
+API_KEY = os.environ.get("GEMINI_API_KEY", "")
 DB_PATH = os.path.join(os.path.dirname(__file__), "flashlite.db")
 
 MODEL_QUEUE = [
     "gemini-flash-latest",
     "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-exp",
+    "gemini-2.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
 ]
 AVAILABLE_MODEL = None
 
@@ -109,21 +109,9 @@ def detect_best_model():
     global AVAILABLE_MODEL
     if AVAILABLE_MODEL:
         return AVAILABLE_MODEL
-    print("Testing Gemini models...")
-    for model in MODEL_QUEUE:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
-            payload = {"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"maxOutputTokens": 5}}
-            req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
-                                          headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(req, timeout=15) as r:
-                json.loads(r.read().decode())
-                AVAILABLE_MODEL = model
-                print(f"OK: {model}")
-                return model
-        except Exception as e:
-            print(f"FAIL {model}: {str(e)[:60]}")
-    return None
+    AVAILABLE_MODEL = MODEL_QUEUE[0]
+    print(f"✅ الموديل: {AVAILABLE_MODEL}")
+    return AVAILABLE_MODEL
 
 
 # ============================================================
@@ -1665,12 +1653,11 @@ def chat_stream():
         # نماذج Gemini متاحة
         models_to_try = [
             "gemini-flash-latest",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-2.5-pro",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-flash-lite-latest",
         ]
 
         for model in models_to_try:
@@ -1680,7 +1667,7 @@ def chat_stream():
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {
                         "temperature": 0.9,
-                        "maxOutputTokens": 2048,
+                        "maxOutputTokens": 1024,
                     }
                 }
                 print(f">>> Trying: {model}")
@@ -1690,7 +1677,7 @@ def chat_stream():
                     headers={"Content-Type": "application/json"},
                     method="POST"
                 )
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with urllib.request.urlopen(req, timeout=30) as resp:
                     raw = resp.read().decode('utf-8')
                     print(f"<<< RAW (first 500): {raw[:500]}")
                     res = json.loads(raw)
@@ -1771,7 +1758,7 @@ def vision():
         payload = {"contents": [{"parts": [
             {"text": prompt},
             {"inlineData": {"mimeType": "image/jpeg", "data": image_b64}}
-        ]}], "generationConfig": {"temperature": 0.7, "maxOutputTokens": 512}}
+        ]}], "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}}
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'),
                                       headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=30) as r:
